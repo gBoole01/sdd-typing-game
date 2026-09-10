@@ -9,6 +9,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Spec 002 — Database & Docker, implemented.** The repository now contains application code for
+  the first time: a pnpm + Turborepo workspace with `apps/api` (NestJS 11), `apps/web` (Next.js 16,
+  a placeholder shell so the image has something to build), `packages/contracts` and
+  `packages/tsconfig`.
+- `apps/api/src/config/env.schema.ts` — the full env contract as a zod schema, validating all 25
+  variables at boot with `superRefine` for the driver-conditional mail credentials. Reports every
+  offending variable in one pass, and warns when a production `DATABASE_URL` points at localhost.
+- `apps/api/prisma/` — `schema.prisma` with `User` and `UserSettings` (spec 001 § 4's models,
+  reduced to the columns that exist before authentication), the initial migration enabling `pg_trgm`
+  and `citext`, and an idempotent seed that refuses to run under `NODE_ENV=production`.
+- `PrismaModule` / `PrismaService` — the one `@Global()` module, with `truncateAll()` guarded on
+  `NODE_ENV === "test"` at call time.
+- `GET /api/v1/health` — liveness probe touching no application table, 200 when the database answers
+  `SELECT 1` within 2 s and 503 `SERVICE_UNAVAILABLE` otherwise.
+- `AllExceptionsFilter` — the single error envelope, mapping `P2002` → 409 (by model and field, so
+  `User.email` becomes `EMAIL_ALREADY_REGISTERED`) and `P2024` / `P1001` → 503, with `requestId`
+  correlated to the pino log line for that request.
+- `docker/` — the compose file (Postgres 17, Mailpit, and the `tools` / `test` / `full` profiles)
+  plus both multi-stage Dockerfiles. Both images run as non-root and were verified serving over HTTP.
+- Root command surface from § 5: `db:up`, `db:migrate`, `db:seed`, `db:reset`, `db:dump`,
+  `db:restore`, `db:nuke`, `test:e2e`, `docs:diagrams` and the rest.
+- `scripts/check-diagrams.mjs` — parses every fenced Mermaid block in the repository; wired to CI.
+- `.github/workflows/ci.yml` — unit and e2e suites, migration drift and seed idempotency, image
+  builds with non-root and secret-hygiene assertions, diagram parsing, and gitleaks.
+- `README.md` — setup, the seeded development account, the command table and troubleshooting.
+- Tests, written and approved before the implementation per the development cycle: 21 unit cases in
+  `env.schema.spec.ts` and 25 e2e cases across `infra.e2e-spec.ts`, `seed.e2e-spec.ts` and the
+  `truncation-*` pair.
 - `ARCHITECTURE.md` describing the target architecture: pnpm + Turborepo monorepo
   (`apps/api` NestJS, `apps/web` Next.js App Router, `packages/contracts`,
   `packages/typing-engine`), the Next.js-as-BFF boundary, state-management rules, the testing
@@ -27,6 +55,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `CLAUDE.md`: the global validation pipe is `ZodValidationPipe` (`nestjs-zod`), not Nest's
+  `ValidationPipe`. The two rules contradicted each other — Nest's pipe hard-requires
+  `class-validator`, the library `ARCHITECTURE.md` § 9 decision 2 rejected — so `whitelist` and
+  `forbidNonWhitelisted` are now expressed by the schemas in `packages/contracts` being strict.
+- `spec/features/002-database-and-docker.md`: § 4 gained the `erDiagram` that `spec/README.md`
+  requires of every feature spec, and names the two tables § 2 had promised without defining. § 5
+  gained the infrastructure error-code table (`SERVICE_UNAVAILABLE`, `RESOURCE_CONFLICT`,
+  `VALIDATION_FAILED`, `NOT_FOUND`, `INTERNAL_ERROR`), since a `code` must appear in a spec before
+  it appears in code. § 5's Dockerfile stage table was corrected against a working build: `pnpm
+  deploy` replaces `pnpm prune --prod`, which leaves the workspace root's devDependencies in the
+  runtime image, and `prisma generate` must run a second time after the deploy or the image builds
+  cleanly and fails at boot.
+- `spec/features/002-database-and-docker.md` § 8: the image-size budgets are recorded as **not met**
+  and needing a decision. `node:22-alpine` is 228 MB on arm64 by itself, which is 91% of the 250 MB
+  API budget and above the 200 MB web budget outright. Measured 419 MB and 309 MB, with three
+  options and their costs written into the spec.
 - `spec/README.md`: added two mandatory spec sections — **6. Frontend pages & routes** (route map,
   layouts, per-page data/actions/states/error-mapping/a11y; backend-only specs state *"Not
   applicable"* so section numbers stay aligned across specs) and **10. Decision log** (append-only

@@ -1,0 +1,92 @@
+name: typing-game
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: tg-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-typing}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-typing}
+      POSTGRES_DB: ${POSTGRES_DB:-typing_game}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - tg-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-typing} -d ${POSTGRES_DB:-typing_game}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  postgres-test:
+    image: postgres:17-alpine
+    container_name: tg-postgres-test
+    profiles: ["test"]
+    environment:
+      POSTGRES_USER: typing
+      POSTGRES_PASSWORD: typing
+      POSTGRES_DB: typing_game_test
+      PGDATA: /var/lib/postgresql/data
+    ports:
+      - "5433:5432"
+    tmpfs:
+      - /var/lib/postgresql/data
+    command: >
+      postgres -c fsync=off -c full_page_writes=off -c synchronous_commit=off
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U typing -d typing_game_test"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+
+  mailpit:
+    image: axllent/mailpit:latest
+    container_name: tg-mailpit
+    restart: unless-stopped
+    ports:
+      - "1025:1025"   # SMTP, consumed by MAIL_DRIVER=smtp
+      - "8025:8025"   # web UI — open this to read reset mails
+    environment:
+      MP_MAX_MESSAGES: 500
+      MP_SMTP_AUTH_ACCEPT_ANY: 1
+      MP_SMTP_AUTH_ALLOW_INSECURE: 1
+
+  adminer:
+    image: adminer:5
+    profiles: ["tools"]
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  api:
+    build:
+      context: ..
+      dockerfile: docker/api.Dockerfile
+    profiles: ["full"]
+    env_file: [../.env]
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-typing}:${POSTGRES_PASSWORD:-typing}@postgres:5432/${POSTGRES_DB:-typing_game}?schema=public
+    ports:
+      - "3001:3001"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  web:
+    build:
+      context: ..
+      dockerfile: docker/web.Dockerfile
+    profiles: ["full"]
+    env_file: [../.env]
+    environment:
+      API_BASE_URL: http://api:3001/api/v1
+    ports:
+      - "3000:3000"
+    depends_on: [api]
+
+volumes:
+  tg-pgdata:

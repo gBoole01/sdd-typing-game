@@ -1,0 +1,7 @@
+@import "tailwindcss";
+
+/* CSS-first config (ARCHITECTURE.md § 4). Typing-surface tokens are declared by
+   the feature spec that introduces the surface. */
+@theme {
+  --font-mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, monospace;
+}

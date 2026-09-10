@@ -84,8 +84,12 @@ All settled 2026-09-10. Reasoning and trade-offs live in
   Never offset.
 - `JwtAuthGuard` is global via `APP_GUARD` with an opt-out `@Public()` decorator — endpoints are
   protected by default, so a forgotten decorator fails closed.
-- `ValidationPipe` with `whitelist`, `forbidNonWhitelisted`, `transform`. Unknown fields are a 400,
-  never a silent drop.
+- `ZodValidationPipe` (`nestjs-zod`) is the global pipe. Unknown fields are a 400, never a silent
+  drop — enforced by the schemas in `packages/contracts` being strict, which is what `whitelist` and
+  `forbidNonWhitelisted` mean here. Nest's own `ValidationPipe` is **not** used: it hard-requires
+  `class-validator`, the library [ARCHITECTURE.md § 9](ARCHITECTURE.md#9-open-decisions-for-review)
+  decision 2 deliberately rejected, so wiring it back in would reintroduce the twice-declared shape
+  that zod exists to prevent.
 - Prisma error codes never reach a client: `P2002` → 409, `P2024`/`P1001` → 503, mapped in the
   persistence layer.
 - Controllers route; services decide. A conditional with business meaning in a controller is wrong.

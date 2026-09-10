@@ -1,0 +1,26 @@
+{
+  "rootDir": "..",
+  "testEnvironment": "node",
+  "testRegex": ".e2e-spec\\.ts$",
+  "moduleFileExtensions": [
+    "ts",
+    "js",
+    "json"
+  ],
+  "transform": {
+    "^.+\\.ts$": [
+      "ts-jest",
+      {
+        "tsconfig": "<rootDir>/tsconfig.json"
+      }
+    ]
+  },
+  "globalSetup": "<rootDir>/test/global-setup.ts",
+  "setupFilesAfterEnv": [
+    "<rootDir>/test/setup-after-env.ts"
+  ],
+  "testTimeout": 30000,
+  "moduleNameMapper": {
+    "^@typing-game/contracts$": "<rootDir>/../../packages/contracts/src/index.ts"
+  }
+}

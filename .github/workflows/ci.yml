@@ -1,0 +1,209 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: '22'
+
+jobs:
+  # Spec 002 § 9 "Config" + "Infrastructure".
+  test:
+    name: Unit & e2e
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: typing
+          POSTGRES_PASSWORD: typing
+          POSTGRES_DB: typing_game_test
+        ports: ['5433:5432']
+        options: >-
+          --health-cmd "pg_isready -U typing -d typing_game_test"
+          --health-interval 2s --health-timeout 3s --health-retries 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @typing-game/contracts build
+      - run: pnpm --filter api exec prisma generate
+      - name: Unit tests
+        run: pnpm --filter api test
+      - name: e2e tests
+        run: pnpm --filter api test:e2e
+
+  # Spec 002 § 9 "Migrations & seed", US-3.2, US-3.3, US-5.1, US-5.4.
+  migrations:
+    name: Migrations & seed
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: typing
+          POSTGRES_PASSWORD: typing
+          POSTGRES_DB: typing_game_ci
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U typing -d typing_game_ci"
+          --health-interval 2s --health-timeout 3s --health-retries 15
+    env:
+      DATABASE_URL: postgresql://typing:typing@localhost:5432/typing_game_ci?schema=public
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter api exec prisma generate
+
+      - name: migrate deploy against an empty database (US-3.3)
+        run: pnpm --filter api exec prisma migrate deploy
+
+      - name: no drift between schema and migrations (US-3.2)
+        run: |
+          psql "$DATABASE_URL" -c 'CREATE DATABASE typing_game_shadow' || true
+          pnpm --filter api exec prisma migrate diff \
+            --from-migrations ./prisma/migrations \
+            --to-schema-datamodel ./prisma/schema.prisma \
+            --shadow-database-url "postgresql://typing:typing@localhost:5432/typing_game_shadow?schema=public" \
+            --exit-code
+
+      - name: seed is idempotent (US-5.1)
+        run: |
+          pnpm --filter api exec prisma db seed
+          first=$(psql "$DATABASE_URL" -tAc 'SELECT count(*) FROM "User"')
+          pnpm --filter api exec prisma db seed
+          second=$(psql "$DATABASE_URL" -tAc 'SELECT count(*) FROM "User"')
+          echo "rows: $first -> $second"
+          test "$first" = "$second"
+
+      - name: seed refuses NODE_ENV=production (US-5.4)
+        run: |
+          if NODE_ENV=production pnpm --filter api exec prisma db seed; then
+            echo "::error::seed ran under NODE_ENV=production"
+            exit 1
+          fi
+
+  # US-3.5 — a destructive migration must be visible in review.
+  destructive-migration:
+    name: Destructive migration check
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Detect DROP COLUMN / DROP TABLE
+        id: detect
+        run: |
+          changed=$(git diff --name-only origin/${{ github.base_ref }}...HEAD \
+            -- 'apps/api/prisma/migrations/**/*.sql')
+          if [ -n "$changed" ] && echo "$changed" | xargs -r grep -liE 'DROP (COLUMN|TABLE)'; then
+            echo "destructive=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "destructive=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Label the pull request
+        if: steps.detect.outputs.destructive == 'true'
+        run: gh pr edit "$NUMBER" --add-label destructive-migration
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NUMBER: ${{ github.event.pull_request.number }}
+
+  # Spec 002 § 9 "Docker".
+  docker:
+    name: Images
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build both images from a clean checkout
+        run: |
+          docker build -f docker/api.Dockerfile -t tg-api:ci .
+          docker build -f docker/web.Dockerfile -t tg-web:ci .
+
+      - name: Final images run as non-root
+        run: |
+          for image in tg-api:ci tg-web:ci; do
+            user=$(docker inspect "$image" --format '{{.Config.User}}')
+            echo "$image runs as '${user}'"
+            test -n "$user" && test "$user" != "root"
+          done
+
+      - name: No secret from .env.example appears in any layer
+        run: |
+          secrets=$(grep -E '^(JWT_ACCESS_SECRET|IP_HASH_PEPPER)=' .env.example | cut -d= -f2-)
+          for image in tg-api:ci tg-web:ci; do
+            for secret in $secrets; do
+              if docker history --no-trunc "$image" | grep -qF "$secret"; then
+                echo "::error::secret found in $image layers"
+                exit 1
+              fi
+            done
+          done
+
+      - name: Report image sizes
+        run: docker image ls tg-api:ci tg-web:ci --format '{{.Repository}}:{{.Tag}} {{.Size}}'
+
+      - name: Default profile brings up mail capture
+        run: |
+          cp .env.example .env
+          docker compose -f docker/docker-compose.yml up -d --wait postgres mailpit
+          curl -sf http://localhost:8025/api/v1/info > /dev/null
+          timeout 5 sh -c 'until nc -z localhost 1025; do sleep 0.2; done'
+
+      - name: Composed stack answers /api/v1/health
+        run: |
+          docker compose -f docker/docker-compose.yml --profile full up -d --wait api
+          for i in $(seq 1 30); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:3001/api/v1/health || true)
+            [ "$code" = "200" ] && break
+            sleep 2
+          done
+          test "$code" = "200"
+
+      - name: Tear down
+        if: always()
+        run: docker compose -f docker/docker-compose.yml --profile full down -v
+
+  # spec/README.md § Diagrams — a diagram that does not parse is a blank space.
+  diagrams:
+    name: Mermaid diagrams
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm docs:diagrams
+
+  secrets:
+    name: Secret scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

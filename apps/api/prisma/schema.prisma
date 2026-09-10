@@ -1,0 +1,69 @@
+// Spec 002 § 4 owns the infrastructure-level schema concerns: the generator,
+// the datasource, the extensions and the conventions below. The two models here
+// are spec 001 § 4's, reduced to the fields that exist before authentication is
+// implemented — they are the "two tables needed to prove migrations work" of
+// spec 002 § 2. Spec 001 adds their remaining relations.
+
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["relationJoins"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id                 String    @id @default(cuid(2))
+  email              String    @unique // stored lowercased
+  username           String    @unique // display form, as typed
+  usernameNormalized String    @unique // NFKC + casefold + confusable skeleton
+  passwordHash       String
+  acceptedTermsAt    DateTime  @db.Timestamptz(3) // set at registration, never null
+  passwordChangedAt  DateTime? @db.Timestamptz(3) // surfaced on the sessions page
+  lastLoginAt        DateTime? @db.Timestamptz(3)
+  usernameChangedAt  DateTime? @db.Timestamptz(3)
+  createdAt          DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt          DateTime  @updatedAt @db.Timestamptz(3)
+
+  settings UserSettings?
+
+  // Filtered by registration date on the admin and leaderboard "new users" views.
+  @@index([createdAt])
+}
+
+model UserSettings {
+  userId String @id
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  caretStyle      CaretStyle @default(SMOOTH)
+  soundEnabled    Boolean    @default(false)
+  theme           Theme      @default(SYSTEM)
+  defaultDuration Int        @default(30)
+  defaultMode     TestMode   @default(TIME)
+  language        String     @default("en") // BCP-47, validated in packages/contracts
+  blindMode       Boolean    @default(false) // hide correctness while typing
+  stopOnError     Boolean    @default(false)
+
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+}
+
+enum CaretStyle {
+  OFF
+  BLOCK
+  UNDERLINE
+  SMOOTH
+}
+
+enum Theme {
+  SYSTEM
+  LIGHT
+  DARK
+}
+
+enum TestMode {
+  TIME
+  WORDS
+  QUOTE
+}

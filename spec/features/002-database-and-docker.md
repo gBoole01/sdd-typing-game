@@ -3,7 +3,7 @@
 | | |
 | --- | --- |
 | **Spec** | 002 |
-| **Status** | Approve |
+| **Status** | Implemented |
 | **Owner** | Nicolas |
 | **Last updated** | 2026-09-10 |
 | **Depends on** | — (this is the foundation spec) |
@@ -124,6 +124,45 @@ datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
 }
+```
+
+### The two tables
+
+This spec creates exactly two tables — the minimum that exercises every convention below, so the
+migration workflow is proven against a real schema rather than an empty one. Both are
+[spec 001 § 4](001-authentication-and-users.md#4-data-model)'s, reduced to the columns that exist
+before authentication is implemented; spec 001 adds their remaining relations.
+
+```mermaid
+erDiagram
+    USER ||--o| USER_SETTINGS : "has at most one, cascade on delete"
+
+    USER {
+        string id PK "cuid2"
+        string email UK "stored lowercased"
+        string username UK "display form, as typed"
+        string usernameNormalized UK "NFKC and casefold"
+        string passwordHash "argon2id"
+        timestamptz acceptedTermsAt "set at registration"
+        timestamptz passwordChangedAt "null until first change"
+        timestamptz lastLoginAt "null until first login"
+        timestamptz usernameChangedAt "null until first change"
+        timestamptz createdAt "indexed"
+        timestamptz updatedAt "auto"
+    }
+
+    USER_SETTINGS {
+        string userId PK "also FK to User"
+        enum caretStyle "OFF BLOCK UNDERLINE SMOOTH"
+        boolean soundEnabled "default false"
+        enum theme "SYSTEM LIGHT DARK"
+        int defaultDuration "seconds, default 30"
+        enum defaultMode "TIME WORDS QUOTE"
+        string language "BCP-47, default en"
+        boolean blindMode "default false"
+        boolean stopOnError "default false"
+        timestamptz updatedAt "auto"
+    }
 ```
 
 ### Conventions enforced by review
@@ -427,19 +466,51 @@ per-invocation connections exhaust the pool; moving to one requires amending thi
 `{ "error": { "code": "SERVICE_UNAVAILABLE", … } }` otherwise. The check does not touch application
 tables — a liveness probe must not depend on the schema being migrated.
 
+### Infrastructure error codes
+
+A `code` is part of the API surface and must appear in a spec before it appears in code
+([spec/README.md § Error envelope](../README.md#error-envelope)). These five are owned by this spec
+because they describe infrastructure failures rather than any domain: they are emitted by the global
+exception filter, not by a feature. Every other `code` belongs to the spec that introduces it.
+
+| `code` | Status | Emitted when |
+| --- | --- | --- |
+| `SERVICE_UNAVAILABLE` | 503 | The database is unreachable or the pool is exhausted — Prisma `P1001`, `P1002`, `P2024`, and the `/health` probe failing |
+| `RESOURCE_CONFLICT` | 409 | A unique constraint was violated (`P2002`) that no domain spec has claimed. A constraint with a domain meaning maps to that domain's `code` instead — `User.email` → `EMAIL_ALREADY_REGISTERED` ([spec 001 § 5](001-authentication-and-users.md#5-interface-contracts)) |
+| `VALIDATION_FAILED` | 400 | A request payload failed its zod schema. Carries `details[]` of `{ path, message }` |
+| `NOT_FOUND` | 404 | No route matched. A missing *resource* is the owning spec's `code`, not this one |
+| `INTERNAL_ERROR` | 500 | An unhandled exception. The message is fixed and generic; the cause reaches the log under the same `requestId`, never the client |
+
+The mapping is applied at the boundary rather than at each call site: "a Prisma error code never
+reaches a client" is a property of the last thing that touches the response, and one uncovered
+service method would otherwise break the guarantee silently.
+
 ### Dockerfiles
 
-`docker/api.Dockerfile`, four stages:
+`docker/api.Dockerfile`, five stages:
 
 | Stage | Does |
 | --- | --- |
-| `base` | `node:22-alpine`, `corepack enable`, non-root `node` user |
-| `deps` | `turbo prune --scope=api --docker`, then `pnpm install --frozen-lockfile` against the pruned lockfile |
-| `build` | `prisma generate`, `nest build`, then `pnpm prune --prod` |
-| `runner` | Copies `dist/`, pruned `node_modules`, `prisma/`. `USER node`. `CMD ["node", "dist/main.js"]` |
+| `base` | `node:22-alpine`, `corepack enable` |
+| `pruner` | `turbo prune api --docker` — narrows the context to `api` and the packages it depends on |
+| `deps` | `pnpm install --frozen-lockfile` against the pruned lockfile. Carries the toolchain `argon2` needs, which the runtime image never sees |
+| `build` | `prisma generate`, `nest build`, `pnpm --filter api --prod deploy`, then `prisma generate` again into the deployed tree |
+| `runner` | Copies the deployed tree only. `USER node`. `CMD ["node", "dist/main.js"]` |
 
 `docker/web.Dockerfile` mirrors it, using Next.js `output: "standalone"` and copying
 `.next/standalone` plus `.next/static`.
+
+Two details that the obvious version of this gets wrong, both found by building it:
+
+- **`pnpm deploy`, not `pnpm prune --prod`.** Pruning leaves the *workspace root's*
+  devDependencies — `turbo`, `mermaid`, the Prisma CLI — in the store the runner inherits, which is
+  most of a gigabyte of tooling in a production image. `pnpm deploy` builds a self-contained tree
+  from one package's production dependencies instead.
+- **`prisma generate` runs twice.** `pnpm deploy` re-resolves `@prisma/client` into a differently
+  peer-hashed store path, so the client generated before the deploy is not the one the deployed tree
+  links to. The second generate targets the deployed schema. Without it the image builds cleanly and
+  then fails at boot with *"@prisma/client did not initialize yet"* — which is why § 9's Docker job
+  curls `/health` through the composed stack rather than only asserting that the build exits 0.
 
 Hard rules:
 
@@ -493,14 +564,35 @@ rather than part of the product.
 | --- | --- |
 | Cold `pnpm db:up` to healthy | ≤ 10 s on Apple Silicon |
 | Full e2e suite (test profile) | ≤ 90 s |
-| API image size | ≤ 250 MB |
-| Web image size | ≤ 200 MB |
+| API image size | ≤ 250 MB — **not met, needs a decision.** Measured 419 MB (arm64) |
+| Web image size | ≤ 200 MB — **not met, needs a decision.** Measured 309 MB (arm64) |
 | Postgres version | 17.x, pinned to the minor via digest in CI |
 | Mailpit | Memory-only, capped at 500 messages. Never present in a production compose file or image |
 | Backups (local) | `pnpm db:dump` writes `./.backups/<ISO8601>.sql.gz`; `pnpm db:restore <file>` restores. `.backups/` gitignored |
 | Migration determinism | CI applies every migration to an empty database from scratch on each PR |
 | Secret hygiene | `gitleaks` in CI; `.env`, `.env.local`, `.backups/` gitignored. `.env.local` is never opened by an agent |
 | Container security | Non-root user, no `--privileged`, no host network, read-only root filesystem where the app allows |
+
+### The image-size budgets are not achievable as written
+
+Both targets predate a measurement, and both are below the floor:
+
+- **`node:22-alpine` is 228 MB on arm64** — 91% of the API budget and above the web budget outright,
+  before a byte of application code. There is no smaller official Node Alpine image.
+- **`@prisma/client` declares `prisma` and `typescript` as `peerDependencies`**, so even a
+  production-only deploy resolves the CLI, `@prisma/engines` and `effect` into the runtime tree. The
+  Dockerfile removes them after generating — none is reachable at runtime — which took the API image
+  from 1.1 GB to 419 MB. What remains is the query engine, which cannot be removed.
+
+The budgets therefore need a decision rather than more optimisation. The options, cheapest first:
+
+| Option | Result | Cost |
+| --- | --- | --- |
+| Restate the budgets at ≤ 450 MB / ≤ 350 MB | Nothing to build | The budgets stop being aspirational and start being true |
+| Move both to `gcr.io/distroless/nodejs22` | Roughly −90 MB each | No shell in the image, so debugging is harder and `docker exec … sh` in § 9 must change |
+| Generate the Prisma client to an app-local `output` | Drops the peer graph entirely | Every `@prisma/client` import in `src/` and `test/` changes, including in approved tests |
+
+Until one is chosen, both images are over budget and CI reports their size without failing on it.
 
 ## 9. Test plan
 

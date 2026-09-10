@@ -254,5 +254,5 @@ still cheap to change.
 
 | Spec | Title | Status | Notes |
 | --- | --- | --- | --- |
-| [001](features/001-authentication-and-users.md) | Authentication & Users | Draft | Revised 2026-09-10 after review: `Session` split from `RefreshToken`, refresh confined to cookie-writable surfaces, forwarded client address, two named cookie sets, Bearer transport dropped. Q1–Q25 resolved; § 11 is empty and nothing blocks implementation |
-| [002](features/002-database-and-docker.md) | Database & Docker | Draft | All 5 open questions resolved 2026-09-10. Prisma, long-lived container, truncate isolation, no Redis |
+| [001](features/001-authentication-and-users.md) | Authentication & Users | Approved | Revised 2026-09-10 after review: `Session` split from `RefreshToken`, refresh confined to cookie-writable surfaces, forwarded client address, two named cookie sets, Bearer transport dropped. Q1–Q25 resolved; § 11 is empty and nothing blocks implementation |
+| [002](features/002-database-and-docker.md) | Database & Docker | Implemented | All 5 open questions resolved 2026-09-10. Prisma, long-lived container, truncate isolation, no Redis. Implemented 2026-09-10; the § 8 image-size budgets are the one requirement not met |
