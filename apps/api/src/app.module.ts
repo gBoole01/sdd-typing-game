@@ -1,11 +1,20 @@
-import { Module } from '@nestjs/common';
+import { MiddlewareConsumer, Module, NestModule } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
+import { APP_GUARD } from '@nestjs/core';
 import { randomUUID } from 'node:crypto';
 import { LoggerModule } from 'nestjs-pino';
 
+import { JwtAuthGuard } from './common/auth/jwt-auth.guard';
+import { ClientIpMiddleware } from './common/client-ip/client-ip.middleware';
+import { ClockModule } from './common/clock/clock.module';
+import { CommonModule } from './common/common.module';
+import { RateLimitGuard } from './common/rate-limit/rate-limit.guard';
 import type { Env } from './config/env.schema';
 import { validateEnv } from './config/env.schema';
+import { AuthModule } from './modules/auth/auth.module';
 import { HealthModule } from './modules/health/health.module';
+import { MailModule } from './modules/mail/mail.module';
+import { UsersModule } from './modules/users/users.module';
 import { PrismaModule } from './prisma/prisma.module';
 
 @Module({
@@ -37,8 +46,25 @@ import { PrismaModule } from './prisma/prisma.module';
         },
       }),
     }),
+    ClockModule,
+    CommonModule,
     PrismaModule,
+    MailModule,
     HealthModule,
+    AuthModule,
+    UsersModule,
+  ],
+  providers: [
+    // Order matters: a rate-limited endpoint answers 429 before it answers 401,
+    // so an unauthenticated flood is rejected at the cheaper gate.
+    { provide: APP_GUARD, useClass: RateLimitGuard },
+    // Global with a `@Public()` opt-out, so endpoints are protected by default
+    // and a forgotten decorator fails closed.
+    { provide: APP_GUARD, useClass: JwtAuthGuard },
   ],
 })
-export class AppModule {}
+export class AppModule implements NestModule {
+  configure(consumer: MiddlewareConsumer): void {
+    consumer.apply(ClientIpMiddleware).forRoutes('*');
+  }
+}

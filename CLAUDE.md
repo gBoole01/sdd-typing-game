@@ -8,10 +8,11 @@ Operating contract for coding agents in this repository. Read this before touchi
 app records WPM, raw WPM, accuracy, consistency and a keystroke timeline, then persists results into
 personal bests and leaderboards.
 
-**Current state: specification only.** There is no application code, no `package.json`, no
-`node_modules`, no git repository. The five markdown files below are the entire repo. Every command
-in § Commands is *specified* in spec 002 but does not exist yet — do not run them, and do not report
-their output.
+**Current state: spec 002 implemented, spec 001 in progress.** The monorepo is real — pnpm
+workspaces, Turborepo, a git repository, and a working test database. Spec 002 (Postgres, Prisma,
+migrations, env contract, Dockerfiles, Mailpit) shipped in `feat: implements 002`. Spec 001 is at
+step 5 of the cycle below: its backend tests are written and human-approved, and the implementation
+they describe is being built against them. Every command in § Commands runs.
 
 ## The one rule that overrides everything
 
@@ -42,10 +43,10 @@ spec, write the spec first (per [spec/README.md](spec/README.md)) and get it rev
 | [spec/features/001-authentication-and-users.md](spec/features/001-authentication-and-users.md) | Auth, sessions, password reset, profile, settings, account deletion, **and all their frontend pages** |
 | [spec/features/002-database-and-docker.md](spec/features/002-database-and-docker.md) | Postgres, Prisma, migrations, env contract, Dockerfiles, Mailpit |
 
-Planned but not yet created: `apps/api` (NestJS), `apps/web` (Next.js), `packages/contracts`,
-`packages/typing-engine`, `docker/`. Layout is fixed in
-[ARCHITECTURE.md § 2](ARCHITECTURE.md#2-repository-layout) — follow it exactly rather than inventing
-a structure.
+Built: `apps/api` (NestJS), `apps/web` (Next.js), `packages/contracts`, `packages/tsconfig`,
+`docker/`. Not yet created: `packages/typing-engine` (spec 003), `packages/eslint-config`. Layout is
+fixed in [ARCHITECTURE.md § 2](ARCHITECTURE.md#2-repository-layout) — follow it exactly rather than
+inventing a structure.
 
 ## Confirmed decisions — do not re-litigate
 
@@ -152,7 +153,7 @@ All settled 2026-09-10. Reasoning and trade-offs live in
 - `pnpm` only — never `npm` or `yarn`.
 - Run `tsc --noEmit` after TypeScript changes.
 
-## Commands (specified in spec 002 — not created yet)
+## Commands
 
 ```bash
 cp .env.example .env
@@ -202,10 +203,40 @@ the resend button is the mitigation (Q23).
 
 ## Immediately next
 
-Recommended order for the first test suites, per the cycle above:
+Spec 001's backend tests are written and approved (gate passed): `auth.e2e-spec.ts`,
+`users.e2e-spec.ts`, `password-reset.e2e-spec.ts`, the `AuthService` rotation matrix, client-address
+derivation, and the `packages/contracts` schema and username-normalisation suites.
 
-1. `apps/api/src/config/env.schema.spec.ts` + `apps/api/test/infra.e2e-spec.ts` (spec 002 § 9) —
-   nothing else can be tested until the test database and env validation are proven.
-2. `packages/typing-engine` unit tests — pure, no infrastructure.
-3. `apps/api/test/auth.e2e-spec.ts` and `password-reset.e2e-spec.ts` (spec 001 § 9) — the
-   refresh grace-window branch needs fake-clock table coverage.
+Spec 001 is **implemented**, both gates passed: 362 tests green (108 API e2e, 115 web, 94 contract
+schemas, 45 API unit), typecheck and build clean, and all eight route budgets under 40 kB.
+
+1. `packages/typing-engine` unit tests — pure, no infrastructure — ahead of spec 003.
+2. **Spec 003** (typing tests, passages, results, `GET /users/me/stats`). It extends the existing
+   `TestResult` model rather than redefining it (001 § 10, Q12), and `/account`'s stats panel is
+   already waiting behind a `<Suspense>` boundary rendering the empty state.
+
+Three things spec 001 left open, each recorded rather than quietly worked around:
+
+- **§ 6 claims `/login`, `/forgot-password`, `/terms` and `/privacy` are statically rendered**, and
+  also that `app/layout.tsx` renders auth state from `getSession()`. Those cannot both hold: a root
+  layout that reads cookies makes every route dynamic. Every route is currently dynamic. Resolving it
+  means either partial prerendering or moving the header's auth state out of the root layout.
+- **The `/register` guest banner has no data source.** § 6 says the page fetches the guest result
+  count, but § 5 defines no endpoint that returns one — spec 003 owns result reads. The form renders
+  the banner whenever the count is above zero and is passed `0` until then.
+- **The bundle budget is measured on a webpack build** (`pnpm --filter web size` runs
+  `next build --webpack` first). Turbopack, which the real build uses, emits flat content-hashed
+  chunks with no route attribution, so a per-route budget cannot be computed from its output.
+
+Two interpretations were fixed while writing the tests and are now binding; spec 001's prose still
+needs amending to match:
+
+- **§ 7 contradicts § 4 and § 9 for `аdmin`** (Cyrillic `а` + Latin `dmin`). The reserved-list check
+  runs on the skeleton **before** the single-script check, so that name is 409 `USERNAME_TAKEN` with
+  `RESERVED`, not a 400. § 7's edge-case row reads the other way round and is wrong.
+- **`POST /auth/logout` is `@Public()`.** § 5's table marks it `access`, but US-5.1 requires 204 with
+  no session, which the global guard would otherwise reject.
+
+Structured error facts ride in `details[]`, the envelope's only structured slot: a reserved username
+is `[{ path: "username", message: "RESERVED" }]`, and the username cooldown puts its `retryAfter` in
+that `message` as an ISO-8601 instant.

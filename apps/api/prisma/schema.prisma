@@ -1,8 +1,7 @@
 // Spec 002 § 4 owns the infrastructure-level schema concerns: the generator,
-// the datasource, the extensions and the conventions below. The two models here
-// are spec 001 § 4's, reduced to the fields that exist before authentication is
-// implemented — they are the "two tables needed to prove migrations work" of
-// spec 002 § 2. Spec 001 adds their remaining relations.
+// the datasource, the extensions and the conventions below. The models are spec
+// 001 § 4's. Spec 003 extends TestResult with its metric columns in its own
+// migration; it does not redefine the table (spec 001 § 10, Q12).
 
 generator client {
   provider        = "prisma-client-js"
@@ -27,7 +26,11 @@ model User {
   createdAt          DateTime  @default(now()) @db.Timestamptz(3)
   updatedAt          DateTime  @updatedAt @db.Timestamptz(3)
 
-  settings UserSettings?
+  settings             UserSettings?
+  sessions             Session[]
+  resetTokens          PasswordResetToken[]
+  results              TestResult[]
+  claimedGuestSessions GuestSession[]
 
   // Filtered by registration date on the admin and leaderboard "new users" views.
   @@index([createdAt])
@@ -47,6 +50,112 @@ model UserSettings {
   stopOnError     Boolean    @default(false)
 
   updatedAt DateTime @updatedAt @db.Timestamptz(3)
+}
+
+/// A device, not a credential. `sid` names this row and is stable across
+/// rotation, which is what makes revocation immediate and total (spec 001 § 4,
+/// "Why Session and RefreshToken are two models", Q6).
+model Session {
+  id     String @id @default(cuid(2))
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  createdAt     DateTime          @default(now()) @db.Timestamptz(3) // session age for the anti-cheat gate
+  expiresAt     DateTime          @db.Timestamptz(3) // createdAt + REFRESH_TOKEN_TTL_DAYS, never extended
+  lastUsedAt    DateTime          @default(now()) @db.Timestamptz(3)
+  revokedAt     DateTime?         @db.Timestamptz(3)
+  revokedReason RevocationReason?
+
+  userAgent String?
+  ipHash    String? // peppered with IP_HASH_PEPPER; never a raw address
+
+  refreshTokens RefreshToken[]
+
+  // The sessions page, logout-all, the cap eviction and the guard's per-request
+  // lookup all filter on this pair.
+  @@index([userId, revokedAt])
+  // Supports the nightly cleanup, which would otherwise scan every session ever created.
+  @@index([expiresAt])
+}
+
+/// One rotation. Turns over every fifteen minutes and the user never sees it.
+model RefreshToken {
+  id        String  @id @default(cuid(2))
+  sessionId String
+  session   Session @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  tokenHash  String    @unique // SHA-256 only; a database dump must not yield usable tokens
+  createdAt  DateTime  @default(now()) @db.Timestamptz(3)
+  expiresAt  DateTime  @db.Timestamptz(3) // copied from Session.expiresAt, never extended
+  consumedAt DateTime? @db.Timestamptz(3) // first rotation; the grace window runs from here
+
+  // Revocation and cleanup walk a session's tokens; the rotation path looks up
+  // by tokenHash, which is already unique.
+  @@index([sessionId, consumedAt])
+  @@index([expiresAt])
+}
+
+model PasswordResetToken {
+  id     String @id @default(cuid(2))
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  tokenHash     String    @unique // SHA-256; the plaintext exists only in the mail
+  expiresAt     DateTime  @db.Timestamptz(3)
+  usedAt        DateTime? @db.Timestamptz(3)
+  invalidatedAt DateTime? @db.Timestamptz(3) // set when a newer request supersedes it
+  createdAt     DateTime  @default(now()) @db.Timestamptz(3)
+  requestIpHash String?
+
+  // Invalidating prior tokens on a new request is one indexed update.
+  @@index([userId, usedAt])
+  @@index([expiresAt])
+}
+
+model GuestSession {
+  id        String   @id @default(cuid(2))
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  expiresAt DateTime @db.Timestamptz(3) // createdAt + GUEST_SESSION_TTL_DAYS
+
+  claimedBy     String? // User.id once claimed
+  claimedByUser User?     @relation(fields: [claimedBy], references: [id], onDelete: SetNull)
+  claimedAt     DateTime? @db.Timestamptz(3)
+
+  results TestResult[]
+
+  @@index([expiresAt])
+  // Registration checks whether a presented guest session was already claimed,
+  // on a table that grows with every visitor.
+  @@index([claimedBy])
+}
+
+/// Created here with only the columns this spec's claim, anonymise and delete
+/// flows need. Spec 003 adds the metric columns to this same model (Q12).
+model TestResult {
+  id             String        @id @default(cuid(2))
+  userId         String?
+  // US-8.3 expressed as a constraint rather than as application code.
+  user           User?         @relation(fields: [userId], references: [id], onDelete: SetNull)
+  guestSessionId String?
+  guestSession   GuestSession? @relation(fields: [guestSessionId], references: [id], onDelete: SetNull)
+
+  unranked  Boolean  @default(false) // young or guest session
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  // Account deletion and (in spec 003) history both filter on the user and order by time.
+  @@index([userId, createdAt])
+  @@index([guestSessionId])
+}
+
+enum RevocationReason {
+  LOGOUT
+  LOGOUT_ALL
+  MANUAL_REVOKE
+  REUSE_DETECTED
+  PASSWORD_RESET
+  PASSWORD_CHANGE
+  ACCOUNT_DELETED
+  SESSION_LIMIT
 }
 
 enum CaretStyle {

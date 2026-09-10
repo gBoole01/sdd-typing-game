@@ -1,4 +1,5 @@
 import { INestApplication, VersioningType } from '@nestjs/common';
+import cookieParser from 'cookie-parser';
 import { ZodValidationPipe } from 'nestjs-zod';
 
 import { AllExceptionsFilter } from './common/filters/all-exceptions.filter';
@@ -9,6 +10,10 @@ import { AllExceptionsFilter } from './common/filters/all-exceptions.filter';
  * `main.ts` is a setting no test covers.
  */
 export function bootstrapApp(app: INestApplication): INestApplication {
+  // The session transport is cookies only (spec 001 § 5); the guard reads
+  // `tg_access` and nothing else, so parsing them is part of the HTTP surface.
+  app.use(cookieParser());
+
   app.setGlobalPrefix('api');
   app.enableVersioning({ type: VersioningType.URI, defaultVersion: '1' });
 

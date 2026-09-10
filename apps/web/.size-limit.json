@@ -1,0 +1,50 @@
+[
+  {
+    "name": "/login",
+    "path": ".next/static/chunks/app/**/login/*.js",
+    "limit": "40 kB",
+    "gzip": true
+  },
+  {
+    "name": "/register",
+    "path": ".next/static/chunks/app/**/register/*.js",
+    "limit": "40 kB",
+    "gzip": true
+  },
+  {
+    "name": "/forgot-password",
+    "path": ".next/static/chunks/app/**/forgot-password/*.js",
+    "limit": "40 kB",
+    "gzip": true
+  },
+  {
+    "name": "/reset-password",
+    "path": ".next/static/chunks/app/**/reset-password/*.js",
+    "limit": "40 kB",
+    "gzip": true
+  },
+  {
+    "name": "/account",
+    "path": ".next/static/chunks/app/**/account/page*.js",
+    "limit": "40 kB",
+    "gzip": true
+  },
+  {
+    "name": "/account/security",
+    "path": ".next/static/chunks/app/**/account/security/*.js",
+    "limit": "40 kB",
+    "gzip": true
+  },
+  {
+    "name": "/account/settings",
+    "path": ".next/static/chunks/app/**/account/settings/*.js",
+    "limit": "40 kB",
+    "gzip": true
+  },
+  {
+    "name": "/account/danger",
+    "path": ".next/static/chunks/app/**/account/danger/*.js",
+    "limit": "40 kB",
+    "gzip": true
+  }
+]

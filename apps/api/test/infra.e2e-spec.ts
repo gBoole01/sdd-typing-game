@@ -5,6 +5,7 @@ import * as net from 'node:net';
 import request from 'supertest';
 
 import { AppModule } from '../src/app.module';
+import { Public } from '../src/common/decorators/public.decorator';
 import { bootstrapApp } from '../src/bootstrap';
 import { PrismaService } from '../src/prisma/prisma.service';
 import { TEST_DATABASE_URL } from './env';
@@ -19,6 +20,9 @@ import { TEST_DATABASE_URL } from './env';
  * contract is what a client sees — a Prisma code reaching the wire is the
  * failure this asserts against (§ 7).
  */
+// Opted out of the global JwtAuthGuard that spec 001 introduced; this probe
+// exercises the persistence-layer error mapping, not authentication.
+@Public()
 @Controller('__probe')
 class ProbeController {
   constructor(private readonly prisma: PrismaService) {}

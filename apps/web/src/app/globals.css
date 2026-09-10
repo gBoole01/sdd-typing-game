@@ -1,7 +1,353 @@
 @import "tailwindcss";
 
-/* CSS-first config (ARCHITECTURE.md § 4). Typing-surface tokens are declared by
-   the feature spec that introduces the surface. */
+/* ─────────────────────────────────────────────────────────────────────────────
+   Design tokens — Mon Courtier Énergie, DTCG source supplied 2026-09-10.
+   CSS-first config per ARCHITECTURE.md § 4: no JS config, no CSS-in-JS.
+
+   Structure mirrors the source file: primitives → semantic → scales → component.
+   Semantic colours are raw custom properties so a theme can override them, and
+   `@theme inline` maps them onto utilities by reference rather than by value.
+
+   Dark is the default context, as the source specifies. Spec 001's UserSettings
+   carries a SYSTEM | LIGHT | DARK preference, so `data-theme` on <html> is the
+   authoritative switch and `prefers-color-scheme` is the SYSTEM fallback.
+   ───────────────────────────────────────────────────────────────────────────── */
+
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
+
+/* ── Primitives ─────────────────────────────────────────────────────────────
+   Fixed values. Nothing here changes between themes; the semantic layer below
+   is what re-points. */
+:root {
+  --purple-950: #150826;
+  --purple-900: #1b0b33;
+  --purple-800: #241045;
+  --purple-700: #2a1150;
+  --purple-600: #3a1e63;
+  --purple-500: #4a2a7a;
+  --purple-400: #5b2e9e;
+  --purple-300: #8b6fc0;
+  --purple-200: #c9bedd;
+  --purple-100: #ece6f5;
+  --purple-050: #f6f2fa;
+
+  --orange-700: #c9430f;
+  --orange-600: #e8541f;
+  --orange-500: #f26522;
+  --orange-400: #ff6a2c;
+  --orange-300: #ff8a4c;
+  --orange-100: #ffe4d6;
+
+  --white: #ffffff;
+  --neutral-050: #f7f7f9;
+  --neutral-100: #ecebf0;
+  --neutral-300: #b9b3c4;
+  --neutral-600: #6b5c82;
+  --neutral-900: #1b0b33;
+
+  --trustpilot: #00b67a;
+  --error: #d64545;
+
+  --alpha-white-weak: rgb(255 255 255 / 0.08);
+  --alpha-white-medium: rgb(255 255 255 / 0.14);
+  --alpha-white-strong: rgb(255 255 255 / 0.24);
+  --alpha-ink-weak: rgb(21 8 38 / 0.08);
+  --alpha-ink-medium: rgb(21 8 38 / 0.16);
+  --alpha-ink-scrim: rgb(21 8 38 / 0.72);
+}
+
+/* ── Semantic: dark, the default context ───────────────────────────────────── */
+:root {
+  --surface-canvas: var(--purple-900);
+  --surface-section: var(--purple-800);
+  --surface-raised: var(--purple-700);
+  --surface-card: var(--purple-600);
+  --surface-input: var(--purple-600);
+  --surface-footer: var(--purple-950);
+  --surface-inverse: var(--white);
+
+  --text-primary: var(--white);
+  --text-secondary: var(--purple-200);
+  --text-muted: rgb(201 190 221 / 0.62);
+  --text-accent: var(--orange-400);
+  --text-on-accent: var(--white);
+
+  --border-subtle: var(--alpha-white-weak);
+  --border-default: var(--alpha-white-medium);
+  --border-strong: var(--alpha-white-strong);
+  --border-accent: var(--orange-400);
+
+  --accent-default: var(--orange-400);
+  --accent-hover: var(--orange-500);
+  --accent-pressed: var(--orange-600);
+
+  /* Typing surface — NOT in the supplied token file. Derived here because
+     ARCHITECTURE.md § 4 requires caret and character-state tokens, and the
+     source describes a marketing page that has none. Correct text is the
+     primary colour, pending text recedes, and the caret takes the accent:
+     principle 4, "the single most important thing in view". */
+  --char-correct: var(--white);
+  --char-pending: rgb(201 190 221 / 0.45);
+  --char-incorrect: var(--error);
+  --char-incorrect-bg: rgb(214 69 69 / 0.16);
+  --caret: var(--orange-400);
+}
+
+/* Light — the mid-page band, any white card, and the LIGHT theme preference. */
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    --surface-canvas: var(--purple-050);
+    --surface-section: var(--purple-050);
+    --surface-raised: var(--white);
+    --surface-card: var(--white);
+    --surface-input: var(--white);
+    --surface-footer: var(--purple-950);
+    --surface-inverse: var(--purple-900);
+
+    --text-primary: var(--neutral-900);
+    --text-secondary: var(--neutral-600);
+    --text-muted: rgb(107 92 130 / 0.70);
+    --text-accent: var(--orange-500);
+
+    --border-subtle: var(--alpha-ink-weak);
+    --border-default: var(--alpha-ink-medium);
+    --border-strong: rgb(21 8 38 / 0.28);
+
+    --char-correct: var(--neutral-900);
+    --char-pending: rgb(107 92 130 / 0.45);
+    --caret: var(--orange-500);
+  }
+}
+
+:root[data-theme="light"] {
+  --surface-canvas: var(--purple-050);
+  --surface-section: var(--purple-050);
+  --surface-raised: var(--white);
+  --surface-card: var(--white);
+  --surface-input: var(--white);
+  --surface-footer: var(--purple-950);
+  --surface-inverse: var(--purple-900);
+
+  --text-primary: var(--neutral-900);
+  --text-secondary: var(--neutral-600);
+  --text-muted: rgb(107 92 130 / 0.70);
+  --text-accent: var(--orange-500);
+
+  --border-subtle: var(--alpha-ink-weak);
+  --border-default: var(--alpha-ink-medium);
+  --border-strong: rgb(21 8 38 / 0.28);
+
+  --char-correct: var(--neutral-900);
+  --char-pending: rgb(107 92 130 / 0.45);
+  --caret: var(--orange-500);
+}
+
+/* ── Utility mapping ────────────────────────────────────────────────────────
+   `inline` so the utilities emit `var(--surface-card)` and follow the overrides
+   above, rather than baking today's resolved value in. */
+@theme inline {
+  --color-purple-950: var(--purple-950);
+  --color-purple-900: var(--purple-900);
+  --color-purple-800: var(--purple-800);
+  --color-purple-700: var(--purple-700);
+  --color-purple-600: var(--purple-600);
+  --color-purple-500: var(--purple-500);
+  --color-purple-400: var(--purple-400);
+  --color-purple-300: var(--purple-300);
+  --color-purple-200: var(--purple-200);
+  --color-purple-100: var(--purple-100);
+  --color-purple-050: var(--purple-050);
+
+  --color-orange-700: var(--orange-700);
+  --color-orange-600: var(--orange-600);
+  --color-orange-500: var(--orange-500);
+  --color-orange-400: var(--orange-400);
+  --color-orange-300: var(--orange-300);
+  --color-orange-100: var(--orange-100);
+
+  --color-trustpilot: var(--trustpilot);
+  --color-error: var(--error);
+
+  --color-surface: var(--surface-canvas);
+  --color-surface-section: var(--surface-section);
+  --color-surface-raised: var(--surface-raised);
+  --color-surface-card: var(--surface-card);
+  --color-surface-input: var(--surface-input);
+  --color-surface-footer: var(--surface-footer);
+  --color-surface-inverse: var(--surface-inverse);
+
+  --color-content: var(--text-primary);
+  --color-content-secondary: var(--text-secondary);
+  --color-content-muted: var(--text-muted);
+  --color-content-accent: var(--text-accent);
+  --color-content-on-accent: var(--text-on-accent);
+
+  --color-line: var(--border-default);
+  --color-line-subtle: var(--border-subtle);
+  --color-line-strong: var(--border-strong);
+  --color-line-accent: var(--border-accent);
+
+  --color-accent: var(--accent-default);
+  --color-accent-hover: var(--accent-hover);
+  --color-accent-pressed: var(--accent-pressed);
+
+  --color-char-correct: var(--char-correct);
+  --color-char-pending: var(--char-pending);
+  --color-char-incorrect: var(--char-incorrect);
+  --color-char-incorrect-bg: var(--char-incorrect-bg);
+  --color-caret: var(--caret);
+}
+
+/* ── Scales ─────────────────────────────────────────────────────────────────
+   The source's 4px base step is Tailwind's default `--spacing`, so the spacing
+   scale is deliberately not overridden — p-4 is already 16px. */
 @theme {
+  --font-sans: Poppins, Gilroy, "Plus Jakarta Sans", system-ui, sans-serif;
   --font-mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, monospace;
+
+  --text-2xs: 0.625rem;   /* 10px — legal, footnotes */
+  --text-xs: 0.6875rem;   /* 11px — category labels */
+  --text-sm: 0.8125rem;   /* 13px — captions, invoice rows */
+  --text-base: 0.9375rem; /* 15px — body */
+  --text-md: 1.0625rem;   /* 17px — lead paragraph */
+  --text-lg: 1.375rem;    /* 22px — card title */
+  --text-xl: 1.75rem;     /* 28px — h3 */
+  --text-2xl: 2.25rem;    /* 36px — stat figure */
+  --text-3xl: 3rem;       /* 48px — h2 */
+  --text-4xl: 4rem;       /* 64px — h1, hero */
+
+  --leading-tight: 1.08;
+  --leading-snug: 1.25;
+  --leading-normal: 1.6;
+  --leading-loose: 1.75;
+
+  --tracking-display: -0.02em;
+  --tracking-label: 0.08em;
+
+  --radius-xs: 4px;
+  --radius-sm: 8px;
+  --radius-md: 16px;
+  --radius-lg: 24px;
+  --radius-xl: 32px;
+  --radius-pill: 999px;
+
+  --shadow-card: 0 18px 48px rgb(10 2 24 / 0.45);
+  --shadow-float: 0 28px 70px rgb(10 2 24 / 0.55);
+  --shadow-nav: 0 8px 32px rgb(10 2 24 / 0.40);
+
+  --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+  --ease-exit: cubic-bezier(0.4, 0, 1, 1);
+
+  --breakpoint-sm: 30rem; /* 480px; md/lg/xl already match the source */
+}
+
+/* Values with no Tailwind namespace, referenced with arbitrary syntax. */
+:root {
+  --duration-fast: 120ms;
+  --duration-base: 220ms;
+  --duration-slow: 420ms;
+
+  --container-max: 1200px;
+  --container-narrow: 720px;
+  --gutter: clamp(20px, 5vw, 48px);
+  --section-padding-y: clamp(64px, 9vw, 128px);
+  --measure: 62ch;
+
+  --gradient-accent: linear-gradient(135deg, var(--orange-300) 0%, var(--orange-600) 100%);
+  --glow-heading: radial-gradient(ellipse 60% 70% at 50% 0%, rgb(91 46 158 / 0.55) 0%, rgb(91 46 158 / 0) 70%);
+  --glow-hero: radial-gradient(ellipse 80% 55% at 50% 15%, rgb(107 58 178 / 0.60) 0%, rgb(27 11 51 / 0) 72%);
+  --focus-ring: 0 0 0 3px rgb(255 106 44 / 0.45);
+}
+
+/* ── Base ───────────────────────────────────────────────────────────────────── */
+@layer base {
+  html {
+    color-scheme: dark;
+  }
+
+  :root[data-theme="light"] {
+    color-scheme: light;
+  }
+
+  @media (prefers-color-scheme: light) {
+    :root:not([data-theme="dark"]) {
+      color-scheme: light;
+    }
+  }
+
+  body {
+    background-color: var(--surface-canvas);
+    color: var(--text-primary);
+    font-family: var(--font-sans);
+    font-size: var(--text-base);
+    line-height: var(--leading-normal);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* Errors are conveyed by text and icon, never colour alone (spec 001 § 6),
+     so focus must be unmistakable on both grounds. */
+  :focus-visible {
+    outline: none;
+    box-shadow: var(--focus-ring);
+    border-radius: var(--radius-xs);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+}
+
+/* ── Component primitives ───────────────────────────────────────────────────
+   Only the rules the token values cannot express on their own (§ principles). */
+@layer components {
+  /* Principle 2: the marker highlight is the only heading emphasis. Never
+     combine it with a colour change or italic. */
+  .marker {
+    position: relative;
+    display: inline-block;
+    isolation: isolate;
+  }
+
+  .marker::before {
+    content: "";
+    position: absolute;
+    z-index: -1;
+    inset: 0.22em -0.12em 0.06em;
+    background-color: var(--orange-400);
+    border-radius: 2px 6px 3px 5px;
+    transform: skewY(-0.6deg);
+  }
+
+  /* Principle 5: sections separate with radial light, not rules. */
+  .glow-hero {
+    background-image: var(--glow-hero);
+  }
+
+  .glow-heading {
+    background-image: var(--glow-heading);
+  }
+
+  /* Principle 3: light proof objects float on dark ground. Re-points the
+     semantic layer for a subtree rather than forcing per-element overrides. */
+  .surface-light {
+    --surface-card: var(--white);
+    --surface-input: var(--white);
+    --text-primary: var(--neutral-900);
+    --text-secondary: var(--neutral-600);
+    --text-muted: rgb(107 92 130 / 0.70);
+    --text-accent: var(--orange-500);
+    --border-subtle: var(--alpha-ink-weak);
+    --border-default: var(--alpha-ink-medium);
+    --border-strong: rgb(21 8 38 / 0.28);
+
+    background-color: var(--surface-card);
+    color: var(--text-primary);
+  }
 }

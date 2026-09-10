@@ -3,9 +3,9 @@
 | | |
 | --- | --- |
 | **Spec** | 001 |
-| **Status** | Approved |
+| **Status** | Implemented |
 | **Owner** | Nicolas |
-| **Last updated** | 2026-09-10 |
+| **Last updated** | 2026-09-11 |
 | **Depends on** | [002 — Database & Docker](002-database-and-docker.md) |
 
 ## 1. Summary
@@ -497,7 +497,7 @@ Base path `/api/v1`. `Auth` column: **none** = public, **access** = valid access
 | POST | `/auth/register` | none | Create account, open session |
 | POST | `/auth/login` | none | Open session |
 | POST | `/auth/refresh` | refresh | Rotate the session's refresh token |
-| POST | `/auth/logout` | access | Revoke current session |
+| POST | `/auth/logout` | none¹ | Revoke current session |
 | POST | `/auth/logout-all` | access | Revoke all sessions |
 | GET | `/auth/session` | access | Minimal identity + settings, for the BFF session helper |
 | POST | `/auth/guest` | none | Issue a guest session |
@@ -514,6 +514,10 @@ Base path `/api/v1`. `Auth` column: **none** = public, **access** = valid access
 | GET | `/users/username-available` | none | Pre-flight uniqueness check |
 
 `GET /users/me/stats` is rendered by `/account` but specified and owned by spec 003.
+
+¹ `/auth/logout` reads the access token when one is present, but is **not** guarded: US-5.1
+requires 204 even with no session, so a client holding a stale token can always reach a clean state.
+A guarded endpoint would answer 401 instead.
 
 ### Shared auth error codes
 
@@ -949,7 +953,7 @@ No `stats` key: aggregates come from `GET /users/me/stats` (spec 003) and are fe
 | --- | --- | --- |
 | 400 | `VALIDATION_FAILED` | Username rules violated; empty body |
 | 409 | `USERNAME_TAKEN` | Taken or reserved |
-| 429 | `USERNAME_CHANGE_TOO_SOON` | Changed within the last 30 days; `details` carries `retryAfter` |
+| 429 | `USERNAME_CHANGE_TOO_SOON` | Changed within the last 30 days; `details[0]` is `{ path: "username", message: "<ISO-8601 retryAfter>" }` |
 
 ### PATCH `/users/me/password`
 
@@ -1400,7 +1404,7 @@ It never reads the database, and the authoritative check is the NestJS guard plu
 | Email differing only in case (`Nico@x.com` vs `nico@x.com`) | Same account. Lowercased before write and before lookup |
 | Email with a leading/trailing space | Trimmed before validation |
 | Username differing only in case | Rejected as taken; uniqueness is on `usernameNormalized` |
-| Username using a Cyrillic `а` in an otherwise Latin word | 400 `VALIDATION_FAILED` — mixed script is rejected before uniqueness is consulted |
+| Username using a Cyrillic `а` in an otherwise Latin word | 400 `VALIDATION_FAILED` — mixed script is rejected before uniqueness is consulted, **unless its skeleton is reserved**: the reserved list is matched first, so `аdmin` is 409 `USERNAME_TAKEN` with `RESERVED` (§ 4, and the § 9 test row that names both spellings) |
 | Username entirely in one non-Latin script whose skeleton collides with a taken name | 409 `USERNAME_TAKEN`; the skeleton, not the display form, is the unique key |
 | Reserved usernames (`admin`, `root`, `api`, `me`, `settings`, `login`, `logout`, `register`, `null`, `undefined`, `support`, `moderator`, `anonymous`, `guest`) | 409 `USERNAME_TAKEN` with `reason: "RESERVED"`, matched against the skeleton so homoglyph spellings are caught |
 | Two concurrent registrations, same email | One 201, one 409. Enforced by the DB unique index, not a read-then-write check; Prisma `P2002` maps to `ConflictException` |

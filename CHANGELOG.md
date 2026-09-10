@@ -9,6 +9,75 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Spec 001 — Authentication & Users (backend), implemented.** Registration, credential login,
+  rotating refresh tokens with a 10-second grace window, password reset by emailed single-use token,
+  device-session listing and revocation, guest sessions with claim-on-signup, profile and typing
+  preferences, and account deletion. 247 tests pass: 108 e2e, 94 contract-schema unit cases and 45
+  API unit cases.
+- `packages/contracts` — the zod schemas every request and response shape is declared in, with types
+  inferred rather than written: `auth.ts`, `users.ts`, `settings.ts` and the shared field primitives.
+  Username normalisation (`username.ts`) implements § 4's four stages, and
+  `confusables.generated.ts` is a 611-entry TR39 table produced by `scripts/generate-confusables.mjs`
+  and never hand-edited.
+- `apps/api/prisma` — `Session`, `RefreshToken`, `PasswordResetToken`, `GuestSession`, `TestResult`
+  and the `RevocationReason` enum, plus the two raw-SQL `CHECK` constraints Prisma has no primitive
+  for (`TestResult_owner_exclusive`, `UserSettings_defaultDuration_allowed`).
+- `AuthService` — the § 5 refresh decision procedure. A `Session` is a device and a `RefreshToken`
+  is one rotation inside it, so `sid` is stable, revocation is immediate and total, and the device
+  list shows one row per device rather than one per fifteen-minute rotation.
+- `JwtAuthGuard`, global via `APP_GUARD` with a `@Public()` opt-out, resolving user, session and
+  settings in **one** indexed query on `sid` — which is what keeps `GET /auth/session`, called on
+  every protected render, to a single round trip.
+- `CookieService` — the API-origin `tg_*` cookie set of § 5, with the `SameSite` and `Path` values
+  each cookie actually needs.
+- Client-address derivation (§ 8, Q8): `X-Client-Ip` believed only from `TRUSTED_PROXY_CIDRS`,
+  `X-Forwarded-For` ignored entirely, and every per-IP limit and `ipHash` keyed on the result.
+- `MailService` port with `smtp` (Mailpit), `ses` (`@aws-sdk/client-sesv2`, lazily imported) and
+  `memory` drivers, dispatched through `AfterResponse` so a send never sits on the response path.
+- `RateLimiterService` and `RateLimitGuard` implementing every limit in § 8, counting against the
+  injectable `Clock` and exposing `resetAll()` for the suites.
+- **Design tokens in `apps/web`** — `globals.css` now carries a full Tailwind v4 CSS-first token
+  layer (primitives, semantic colours, type scale, radii, shadows, motion) with `data-theme`
+  light/dark switching, plus the marker-highlight, radial-glow and light-surface primitives the
+  system's own principles require.
+- **Spec 001 § 6 — the frontend, implemented.** Every route in the § 6 map: `/login`, `/register`,
+  `/forgot-password`, `/reset-password`, `/terms`, `/privacy`, and the four `(account)` pages, with
+  their layouts and Server Actions. 115 web tests across 11 files.
+- `lib/session.ts` — `getSession()` is `cache()`-wrapped and **never** refreshes; it runs inside
+  renders, where a rotated token could not be persisted, and replaying a consumed one past the grace
+  window is what logged every user out every fifteen minutes in the draft (Q7).
+- `lib/api-fetch.ts` — the only thing that talks to NestJS. Adds the translated cookie, the derived
+  client address and the request id, and retries once through `POST /auth/refresh` — but only where
+  the caller has declared it may write a cookie.
+- `lib/cookies.ts` — translates the API's `tg_*` cookies onto the web origin as `tgw_*`, all three on
+  `Path=/`. The draft's `Path=/api/v1/auth` was an API-origin path no web-origin request ever
+  matches, so the refresh cookie would never have been sent.
+- `proxy.ts` — the § 6 flowchart: account-route redirects carrying `?next=`, one refresh per stale
+  access cookie decoded without verification, and guest issuance on document navigations only, so the
+  router's prefetches cannot mint orphan rows (US-1.5).
+- `apps/web` test tooling — Vitest, React Testing Library, MSW and `size-limit`, with a committed
+  `.size-limit.json` carrying one 40 kB budget per route (Q20). All eight pass, the largest at 1.7 kB.
+
+### Changed
+
+- `apps/api/src/modules/health/health.controller.ts` is now `@Public()`. Spec 001 makes the auth
+  guard global, and a liveness probe that needs a credential is not a liveness probe.
+- The trusted-proxy list is injected through a token rather than read from `ConfigService` at the
+  point of use: `ConfigModule.forRoot()` validates once per module registry, so a second application
+  built in the same process would otherwise silently inherit the first one's environment.
+- `packages/contracts` gained a jest setup and a `tsconfig.build.json`, so its specs are typechecked
+  but never shipped in `dist`.
+- `CLAUDE.md`: the "specification only" state description is replaced — spec 002 is implemented and
+  every command in § Commands runs.
+
+### Fixed
+
+- Reuse detection no longer undoes itself. Revoking the session on a refresh-token replay was written
+  inside the transaction that then threw, so the rollback erased the revocation and a stolen token
+  stayed usable. The revocation is now written outside it.
+
+### Added — spec 002
+
 - **Spec 002 — Database & Docker, implemented.** The repository now contains application code for
   the first time: a pnpm + Turborepo workspace with `apps/api` (NestJS 11), `apps/web` (Next.js 16,
   a placeholder shell so the image has something to build), `packages/contracts` and
