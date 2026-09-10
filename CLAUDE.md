@@ -189,10 +189,12 @@ large structural changes. State assumptions explicitly and flag what was left ou
 
 Tracked in each spec's § 11. As of 2026-09-10, nothing blocks implementation. Outstanding:
 
-- Production mail provider (Resend / Postmark / SES) — blocks the first deploy, not implementation.
-  The `MailService` port isolates it.
-- Retry strategy for failed reset mails — deferred; no queue infrastructure in v1.
 - Production hosting topology and CD pipeline — its own future spec.
+
+Resolved 2026-09-10, do not re-litigate: production mail is **Amazon SES** via
+`@aws-sdk/client-sesv2`, credentials from the container's IAM task role, no static mail secret
+(spec 001 § 10, Q22). Failed reset mails are **not retried** in v1 — no queue infrastructure, and
+the resend button is the mitigation (Q23).
 
 ## Immediately next
 

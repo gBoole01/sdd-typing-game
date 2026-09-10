@@ -40,7 +40,7 @@ typing-game/
 │   │   │   ├── prisma/         # PrismaModule + PrismaService (onModuleInit connect)
 │   │   │   └── modules/
 │   │   │       ├── auth/       # login, register, refresh rotation, password reset, guards
-│   │   │       ├── mail/       # MailService port + smtp | resend | memory drivers
+│   │   │       ├── mail/       # MailService port + smtp | ses | memory drivers
 │   │   │       ├── users/      # profile, settings, account lifecycle
 │   │   │       ├── tests/      # passage generation, test session lifecycle
 │   │   │       ├── results/    # result submission, validation, personal bests
@@ -92,7 +92,7 @@ flowchart TD
         ENGINE["packages/typing-engine<br/>pure metric maths"]
     end
     PG[("PostgreSQL 17")]
-    MAIL["Mail provider<br/>Mailpit local, Resend prod"]
+    MAIL["Mail provider<br/>Mailpit local, Amazon SES prod"]
 
     WEB -->|"HTTP, cookie attached server-side"| API
     WEB -->|"form validation, response parsing"| CONTRACTS
@@ -139,7 +139,7 @@ Rules that make this hold:
 
 - **One module per domain.** `AuthModule`, `UsersModule`, `TestsModule`, `ResultsModule`,
   `LeaderboardModule`, plus `MailModule` — a thin infrastructure module exposing a `MailService` port
-  with swappable drivers (SMTP/Mailpit locally, Resend in production, in-memory in tests), required
+  with swappable drivers (SMTP/Mailpit locally, Amazon SES in production, in-memory in tests), required
   by password reset. A module exposes a service; cross-module access goes through the exported
   service, never through another module's repository.
 - **Controllers route, services decide.** Controllers do: bind route, validate payload via DTO,
@@ -192,7 +192,10 @@ attaches credentials. Rationale:
 
 - Tokens stay in `httpOnly` cookies scoped to the web origin; no token is readable by JS, so an
   XSS foothold cannot exfiltrate a session.
-- No CORS surface, and no third-party-cookie exposure in cross-site contexts.
+- No third-party-cookie exposure in cross-site contexts, and no browser origin ever calls the
+  API — so the `CORS_ORIGIN` allow-list of
+  [spec 002](spec/features/002-database-and-docker.md#environment-contract) exists for direct
+  development and e2e clients, not for the web app. It is a narrow surface, not an absent one.
 - The API can stay on a private network in production.
 
 Cost: one extra hop, and Server Actions are serialized per-session — acceptable for everything
@@ -210,6 +213,7 @@ flowchart LR
     N["NestJS API<br/>/api/v1, guard is authoritative"]
 
     B -->|"navigation"| PX
+    PX -->|"refresh or guest issuance"| N
     PX -->|"allowed"| RSC
     B -->|"form submit"| SA
     B -->|"client-side fetch"| RH
@@ -221,10 +225,21 @@ flowchart LR
 
 ### Route protection
 
-`src/proxy.ts` (Next 16 renamed `middleware.ts` → `proxy.ts`) performs an **optimistic** check:
-cookie present and structurally valid → allow; absent → redirect to `/login`. It does not hit the
-database or the API, because it runs on every prefetch. The authoritative check is the NestJS
-guard on each endpoint, plus a `requireSession()` call in protected Server Components.
+`src/proxy.ts` (Next 16 renamed `middleware.ts` → `proxy.ts`) performs an **optimistic** identity
+check: cookie present and structurally valid → allow; absent → redirect to `/login`. It never reads
+the database, and the authoritative check is the NestJS guard on each endpoint plus a
+`requireSession()` call in protected Server Components.
+
+It makes exactly two API calls, both specified in
+[spec 001 § 6](spec/features/001-authentication-and-users.md#route-protection--proxyts), and both
+because `proxy.ts` is one of the three places Next.js allows a cookie to be written:
+
+- **Token refresh**, when the access cookie is absent or within 30 s of expiry — at most once per
+  15 minutes per client, not once per prefetch. Refreshing inside a Server Component render is
+  impossible: the rotated token could not be persisted, and replaying the consumed one trips reuse
+  detection.
+- **Guest-session issuance**, on a document navigation to the game with no session and no guest
+  cookie. Prefetches are excluded so the router cannot mint orphan rows.
 
 ### State management
 
@@ -362,5 +377,5 @@ the decision.
 | 1 | ORM — **confirmed** | Prisma | Drizzle | Prisma: best-in-class migrations, generated types, mature NestJS integration; heavier runtime, less SQL control. Drizzle: thin, SQL-first, faster cold start; migration tooling and relational query ergonomics are weaker for a team |
 | 2 | DTO validation — **confirmed** | zod in `packages/contracts` + `nestjs-zod` | `class-validator` DTOs per the global convention | zod: one schema shared by web forms and API validation, no drift. class-validator: idiomatic NestJS, better Swagger integration out of the box, but the shape is then declared twice |
 | 3 | Monorepo tool — **confirmed** | pnpm workspaces + Turborepo | pnpm workspaces alone, or Nx | Turborepo: cheap to adopt, good caching. Nx: more power, more config. Plain pnpm: no task graph or caching |
-| 4 | Token transport — **confirmed** | httpOnly cookies via the Next.js BFF | Bearer tokens held in the browser | BFF: XSS cannot read the token, no CORS; costs a hop and makes the web app stateful about sessions. Bearer: simpler, directly consumable by a future mobile client — the API supports both (§ spec 001) so this is a default, not a lock-in |
+| 4 | Token transport — **confirmed** | httpOnly cookies via the Next.js BFF | Bearer tokens held in the browser | BFF: XSS cannot read the token, no CORS; costs a hop and makes the web app stateful about sessions. Bearer: simpler, directly consumable by a future mobile client. Bearer is **out of scope in v1** ([spec 001 § 10](spec/features/001-authentication-and-users.md#10-decision-log), Q11) — no such client exists, and supporting one honestly means returning refresh-token material in a body. The API-origin cookie set is the seam it would replace |
 | 5 | Guest play — **confirmed** | Anonymous results allowed, claimable on signup (guest cookie 90 days) | Auth required to play | Guest play is the conversion funnel for a typing game, but it needs an anonymous-session mechanism and a claim flow |

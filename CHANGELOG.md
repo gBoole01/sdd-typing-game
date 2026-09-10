@@ -34,7 +34,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   it records why.
 - `spec/features/001-authentication-and-users.md`: all five open questions resolved. Password reset
   pulled into scope (single-use emailed token, 30-minute TTL, supersedes prior tokens, revokes all
-  sessions, logs the user back in), which adds a `MailService` port with `smtp` / `resend` /
+  sessions, logs the user back in), which adds a `MailService` port with `smtp` / `ses` /
   `memory` drivers and a `PasswordResetToken` model. Added a 10-second refresh-rotation grace
   window so simultaneous multi-tab refreshes stop causing spurious logouts. Added
   `GET /users/me/sessions` and `DELETE /users/me/sessions/:id`, plus `PATCH /users/me/password`.
@@ -43,6 +43,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   eleven Server Actions, session helpers, `proxy.ts` matchers, and web-side budgets. Recorded
   immediate session revocation (one indexed query per authenticated request) and the per-instance
   rate-limit limitation that follows from running without Redis.
+- `spec/features/001-authentication-and-users.md`: **revised after review** — fifteen defects and a
+  batch of consistency errors resolved, recorded as Q6–Q21 in the spec's decision log. `Session`
+  now models a **device** and a new `RefreshToken` model holds each rotation, which fixes six
+  coupled defects at once: the device list showed one row per 15-minute refresh, `current: true`
+  was undecidable, revoking a device left a 15-minute hole in the immediate-revocation guarantee,
+  grace-window forks accumulated unbounded rows, "revoke all other sessions" had no definition, and
+  the anti-cheat gate fired on every routine rotation. Token refresh is now confined to `proxy.ts`,
+  Server Actions and route handlers — the three surfaces where Next.js permits a cookie write —
+  because refreshing inside a Server Component render dropped the rotated token and tripped the
+  spec's own reuse detector roughly every fifteen minutes. Per-IP rate limits and `ipHash` are
+  keyed on a BFF-forwarded `X-Client-Ip`, trusted only from `TRUSTED_PROXY_CIDRS`; behind the BFF
+  they were previously one global bucket. The cookie story is split into two named sets (`tg_*` on
+  the API origin, `tgw_*` on the web origin with `Path=/` and `SameSite=Lax`), guest sessions are
+  issued from `proxy.ts` on document navigations, session lifetime is absolute rather than sliding,
+  reset mail is dispatched after the 202 instead of on the critical path, `PASSWORD_UNCHANGED` is
+  gone from the unauthenticated reset endpoint, usernames accept Unicode with a single-script rule
+  and a TR39 confusable skeleton, and a new cheap `GET /auth/session` serves the BFF session helper
+  while `GET /users/me` drops aggregates. The Bearer transport is out of scope (it could not have
+  worked: no response returned a refresh token to a body-only client), and 001 now creates a
+  minimal `TestResult` that spec 003 extends. Eight Mermaid diagrams, all re-rendered.
+- `spec/features/001-authentication-and-users.md`: **the last four open questions resolved**, moved
+  to the decision log as Q22–Q25, leaving § 11 empty. Production mail is **Amazon SES** via
+  `@aws-sdk/client-sesv2` rather than its SMTP endpoint, so the container's IAM task role signs the
+  send and the production mail path holds no static secret; the trade-off given up is Resend's
+  minutes-to-first-mail, against SES sandbox removal and manual DKIM/SPF/DMARC, all of it
+  deploy-time work behind an unchanged `MailService` port. Failed reset mails are still not
+  retried in v1, `passwordChangedAt` will not gain a re-login check (the session table already
+  makes that guarantee strictly), and the 20-device session cap ships without a user-visible
+  warning.
+- `spec/features/002-database-and-docker.md`: mail env contract follows SES — `MAIL_DRIVER` is now
+  `smtp | ses | memory`, `RESEND_API_KEY` replaced by a conditional `AWS_REGION` and an optional
+  `SES_CONFIGURATION_SET`, with an edge case recording the one mail misconfiguration that cannot
+  fail fast (credentials resolve lazily from the SDK provider chain, so a missing IAM role surfaces
+  on the first send, not at boot).
+- `spec/features/002-database-and-docker.md`: env contract extended for the above —
+  `APP_PUBLIC_URL` (the API builds reset links and must not read a `NEXT_PUBLIC_*` variable),
+  `TRUSTED_PROXY_CIDRS`, `SESSION_MAX_ACTIVE`, `GUEST_SESSION_TTL_DAYS`, the three Argon2 cost
+  parameters, and `WEB_COOKIE_DOMAIN` on the web side.
+- `spec/README.md`: the development-cycle table pointed step 3 at § 8 for the test plan; it is § 9.
+- `ARCHITECTURE.md`: dropped the "no CORS surface" claim, which contradicted spec 002's required
+  `CORS_ORIGIN`; documented the two API calls `proxy.ts` legitimately makes; recorded Bearer as out
+  of scope in decision 4.
 - `spec/features/002-database-and-docker.md`: all five open questions resolved — infrastructure-only
   Compose, long-lived container deployment, Prisma, truncate-based test isolation, no Redis. Added
   Mailpit to the default Compose profile, the mail and refresh-grace environment variables with
@@ -75,7 +117,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `nestjs-zod`) is recorded in
   [ARCHITECTURE.md § 9](ARCHITECTURE.md#9-open-decisions-for-review), decision 2. Nothing blocks
   implementation.
-- Production mail provider (Resend / Postmark / SES) is unresolved but blocks only the first
-  deploy, not implementation — the `MailService` port isolates the choice.
+- Production mail provider resolved to **Amazon SES**; the remaining work (sandbox removal,
+  verified domain identity, Easy DKIM, SPF, DMARC) is deploy-time and blocks the first send, not
+  implementation. No spec now carries an open question that blocks work.
 
 [Unreleased]: https://github.com/OWNER/typing-game/compare/HEAD

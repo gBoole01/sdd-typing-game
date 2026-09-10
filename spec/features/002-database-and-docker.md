@@ -3,7 +3,7 @@
 | | |
 | --- | --- |
 | **Spec** | 002 |
-| **Status** | Draft — decisions resolved 2026-09-10, awaiting approval to implement |
+| **Status** | Approve |
 | **Owner** | Nicolas |
 | **Last updated** | 2026-09-10 |
 | **Depends on** | — (this is the foundation spec) |
@@ -39,8 +39,10 @@ exact commands.
 - Redis. **Decided against for v1** ([§ 10](#10-decision-log), Q5): one API instance, so
   `@nestjs/throttler`'s memory store is sufficient. This makes every rate limit in spec 001
   per-instance, which is recorded there as a known limitation.
-- Production mail provider setup (sending domain, DKIM/SPF). The local driver is in scope; the
-  provider choice is tracked in [spec 001 § 11](001-authentication-and-users.md#11-open-questions).
+- Production mail provider setup: SES sandbox removal, the verified domain identity, Easy DKIM,
+  SPF and DMARC. The provider is decided — Amazon SES
+  ([spec 001 § 10](001-authentication-and-users.md#10-decision-log), Q22) — and the local `smtp`
+  driver is in scope here; the account and DNS work is deploy-time, not development-time.
 - Observability stack (Prometheus/Grafana/OTel collector).
 - Domain schemas beyond the two tables needed to prove migrations work; each domain's schema lives
   in its own feature spec.
@@ -319,20 +321,29 @@ JWT_ACCESS_TTL=15m
 REFRESH_TOKEN_TTL_DAYS=30
 REFRESH_GRACE_SECONDS=10
 IP_HASH_PEPPER=replace-me-too-abcdefabcdefabcdefabcdef
+SESSION_MAX_ACTIVE=20
+GUEST_SESSION_TTL_DAYS=90
+ARGON2_MEMORY_KIB=19456
+ARGON2_TIME_COST=2
+ARGON2_PARALLELISM=1
 CORS_ORIGIN=http://localhost:3000
+TRUSTED_PROXY_CIDRS=127.0.0.1/32,::1/128
 LOG_LEVEL=debug
 COOKIE_DOMAIN=localhost
+APP_PUBLIC_URL=http://localhost:3000   # must equal NEXT_PUBLIC_APP_URL; the API builds reset links from it
 
 # ── Mail (password reset — spec 001) ───────────────────────────
-MAIL_DRIVER=smtp                      # smtp | resend | memory
+MAIL_DRIVER=smtp                      # smtp | ses | memory
 MAIL_FROM="Typing Game <no-reply@typing-game.local>"
 SMTP_URL=smtp://localhost:1025        # Mailpit; no credentials locally
-RESEND_API_KEY=                       # required only when MAIL_DRIVER=resend
+AWS_REGION=                           # required only when MAIL_DRIVER=ses
+SES_CONFIGURATION_SET=                # optional; bounce and complaint event destination
 PASSWORD_RESET_TTL_MINUTES=30
 
 # ── Web (apps/web) ────────────────────────────────────────────────────
 API_BASE_URL=http://localhost:3001/api/v1
 NEXT_PUBLIC_APP_URL=http://localhost:3000
+WEB_COOKIE_DOMAIN=localhost           # the tgw_* cookies live on this origin, not COOKIE_DOMAIN
 ```
 
 Boot-time validation, `apps/api/src/config/env.schema.ts`:
@@ -347,18 +358,36 @@ Boot-time validation, `apps/api/src/config/env.schema.ts`:
 | `REFRESH_TOKEN_TTL_DAYS` | integer 1–365, default `30` | no |
 | `REFRESH_GRACE_SECONDS` | integer 0–60, default `10` | no |
 | `IP_HASH_PEPPER` | string ≥ 16 chars | yes |
+| `SESSION_MAX_ACTIVE` | integer 1–100, default `20` | no |
+| `GUEST_SESSION_TTL_DAYS` | integer 1–365, default `90` | no |
+| `ARGON2_MEMORY_KIB` | integer ≥ 19456, default `19456` | no |
+| `ARGON2_TIME_COST` | integer 1–10, default `2` | no |
+| `ARGON2_PARALLELISM` | integer 1–8, default `1` | no |
 | `CORS_ORIGIN` | comma-separated origins | yes |
+| `TRUSTED_PROXY_CIDRS` | comma-separated CIDRs, each parseable | yes |
 | `LOG_LEVEL` | pino level, default `info` | no |
 | `COOKIE_DOMAIN` | hostname | yes |
-| `MAIL_DRIVER` | `"smtp" \| "resend" \| "memory"`, default `smtp` | no |
+| `APP_PUBLIC_URL` | valid `http:`/`https:` URL, no trailing slash | yes |
+| `MAIL_DRIVER` | `"smtp" \| "ses" \| "memory"`, default `smtp` | no |
 | `MAIL_FROM` | RFC-5322 address or `Name <addr>` | yes |
 | `SMTP_URL` | valid `smtp:`/`smtps:` URL — **required when** `MAIL_DRIVER=smtp` | conditional |
-| `RESEND_API_KEY` | non-empty — **required when** `MAIL_DRIVER=resend` | conditional |
+| `AWS_REGION` | AWS region id — **required when** `MAIL_DRIVER=ses` | conditional |
+| `SES_CONFIGURATION_SET` | non-empty string when set | no |
 | `PASSWORD_RESET_TTL_MINUTES` | integer 5–1440, default `30` | no |
 
 The two conditional rows use a zod `superRefine`, so choosing a driver without its credential fails
 at boot rather than at the first password-reset attempt — which is exactly the kind of failure that
 otherwise surfaces only in production, from a user who cannot log in to report it.
+
+`APP_PUBLIC_URL` is API-side on purpose. The API builds password-reset links, so it needs the
+public web origin; reading `NEXT_PUBLIC_APP_URL` there would be a `process.env.X!` at a call site
+in a service that has no business knowing about Next.js conventions. The two must hold the same
+value, and a mismatch is a broken reset link, so the seed script asserts it in development.
+`TRUSTED_PROXY_CIDRS` is required rather than defaulted: it decides whether `X-Client-Ip` is
+believed, and every per-IP rate limit in
+[spec 001 § 8](001-authentication-and-users.md#client-address-derivation) depends on getting it
+right. A wrong default is either a global rate-limit bucket or a bypass, and neither should be
+reachable by omission.
 
 Only `NEXT_PUBLIC_*` variables are exposed to the browser bundle. A non-prefixed variable
 referenced in a Client Component is an ESLint error — that mistake ships secrets to the client, so
@@ -451,7 +480,8 @@ rather than part of the product.
 | Docker not running | Scripts surface Docker's own error; the README documents Colima and Docker Desktop as the two supported runtimes |
 | Port 1025 or 8025 already in use | Compose fails with a bind error. Documented remedy: stop the conflicting mail catcher, or override the published ports |
 | `MAIL_DRIVER=smtp` with Mailpit down | The send throws, the auth service catches it, `/auth/forgot-password` still returns 202 and logs at `error` (spec 001 US-6.9). Development is not blocked by a missing mail catcher |
-| `MAIL_DRIVER=resend` with an empty `RESEND_API_KEY` | Boot fails naming the variable (conditional env rule above) |
+| `MAIL_DRIVER=ses` with an empty `AWS_REGION` | Boot fails naming the variable (conditional env rule above) |
+| `MAIL_DRIVER=ses` with no resolvable AWS credentials | Boot succeeds — the SDK resolves credentials lazily from its provider chain, and an IAM task role is not visible at boot. The first send throws, is logged at `error`, and the 202 is unaffected (spec 001 US-6.9). This is the one mail misconfiguration that cannot fail fast |
 | Mailpit restarted mid-development | Previously captured mails are gone — it is memory-only by design. Reset links already sent remain valid until they expire |
 | A test opens its own transaction while the harness truncates | Cannot happen: truncation runs between test files, never concurrently with a test (§ 10 Q4) |
 | `TRUNCATE` blocked by a foreign key | The harness truncates all tables in one statement with `CASCADE`, so ordering is irrelevant |
@@ -562,8 +592,9 @@ None outstanding for this spec.
 
 Two dependent questions live elsewhere:
 
-- **Production mail provider** (Resend / Postmark / SES) — tracked in
-  [spec 001 § 11](001-authentication-and-users.md#11-open-questions) Q1. Only the `MailService`
-  driver and the env vars in § 5 change; nothing in this spec is blocked.
+- **Production mail provider** — resolved to Amazon SES
+  ([spec 001 § 10](001-authentication-and-users.md#10-decision-log), Q22). The env contract in § 5
+  above already carries it: `AWS_REGION` conditional on the driver, no static credential, since the
+  SDK signs with the container's IAM task role.
 - **Production hosting topology and CD pipeline** — deliberately out of scope (§ 2) and its own
   future spec. Q2 above fixes only the *class* of target, which is all the pooling policy needs.

@@ -227,7 +227,7 @@ This cycle is mandatory for every feature. Step 4 is a hard stop.
 | --- | --- | --- |
 | 1 | **Analyze** | Read `spec/features/NNN-*.md` end to end. Raise contradictions before writing anything. |
 | 2 | **Plan** | An implementation strategy presented to the human: files to create, order of work, risks. |
-| 3 | **Red** | Failing tests derived from § 5 (contracts) and § 8 (test plan) of the spec. Tests only — no implementation. |
+| 3 | **Red** | Failing tests derived from § 5 (contracts) and § 9 (test plan) of the spec. Tests only — no implementation. |
 | 4 | **🛑 Human gateway** | The human reviews and explicitly approves the tests. **No feature code is written before that approval.** If the tests are wrong, the spec is usually wrong — go back to step 1. |
 | 5 | **Green** | The minimal clean implementation that makes the approved tests pass. No extra features, no speculative abstraction. |
 | 6 | **Changelog** | An entry under `[Unreleased]` in `CHANGELOG.md`, and the spec's status moved to `Implemented`. |
@@ -254,5 +254,5 @@ still cheap to change.
 
 | Spec | Title | Status | Notes |
 | --- | --- | --- | --- |
-| [001](features/001-authentication-and-users.md) | Authentication & Users | Draft | All 5 open questions resolved 2026-09-10. Scope now includes password reset and single-session revocation |
+| [001](features/001-authentication-and-users.md) | Authentication & Users | Draft | Revised 2026-09-10 after review: `Session` split from `RefreshToken`, refresh confined to cookie-writable surfaces, forwarded client address, two named cookie sets, Bearer transport dropped. Q1–Q25 resolved; § 11 is empty and nothing blocks implementation |
 | [002](features/002-database-and-docker.md) | Database & Docker | Draft | All 5 open questions resolved 2026-09-10. Prisma, long-lived container, truncate isolation, no Redis |
